@@ -5,11 +5,10 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { SuggestedQueries } from "./suggested-queries"
-import { Send, MessageSquare, Bot, Copy, Trash2, RefreshCw, User } from "lucide-react"
 import { queryKnowledgeBase } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { useToast } from "@/hooks/use-toast"
+import { MessageSquare, Trash2, Bot, User, FileText, Copy, RefreshCw, Send } from "lucide-react"
 
 interface QueryMessage {
   id: string
@@ -17,6 +16,34 @@ interface QueryMessage {
   content: string
   timestamp: Date
   query?: string
+  source?: string[] | string
+}
+
+const parseApiResponse = (rawResponse: string) => {
+  try {
+    const parsed = JSON.parse(rawResponse)
+    if (parsed.response && parsed.source) {
+      return {
+        response: parsed.response,
+        source: Array.isArray(parsed.source) ? parsed.source : [parsed.source],
+      }
+    }
+  } catch (e) {
+    // If not JSON, try to extract source from text patterns
+    const sourceMatch =
+      rawResponse.match(/Source:\s*(.+?)(?:\n|$)/i) ||
+      rawResponse.match(/Reference:\s*(.+?)(?:\n|$)/i) ||
+      rawResponse.match(/From:\s*(.+?)(?:\n|$)/i)
+
+    if (sourceMatch) {
+      const source = sourceMatch[1].trim()
+      const response = rawResponse.replace(sourceMatch[0], "").trim()
+      return { response, source: [source] }
+    }
+  }
+
+  // If no source found, return the full response
+  return { response: rawResponse, source: null }
 }
 
 export function QueryInterface() {
@@ -32,7 +59,11 @@ export function QueryInterface() {
   }, [messages])
 
   useEffect(() => {
-    const savedMessages = localStorage.getItem("query-history")
+    const user = getCurrentUser()
+    if (!user) return
+
+    const userSpecificKey = `query-history-${user.email}`
+    const savedMessages = localStorage.getItem(userSpecificKey)
     if (savedMessages) {
       try {
         const parsed = JSON.parse(savedMessages).map((msg: any) => ({
@@ -47,8 +78,10 @@ export function QueryInterface() {
   }, [])
 
   useEffect(() => {
-    if (messages.length > 0) {
-      localStorage.setItem("query-history", JSON.stringify(messages))
+    const user = getCurrentUser()
+    if (messages.length > 0 && user) {
+      const userSpecificKey = `query-history-${user.email}`
+      localStorage.setItem(userSpecificKey, JSON.stringify(messages))
     }
   }, [messages])
 
@@ -80,19 +113,29 @@ export function QueryInterface() {
     try {
       const result = await queryKnowledgeBase(user.email, user.sessionId || "default", currentQuery)
 
-      const botMessage: QueryMessage = {
-        id: (Date.now() + 1).toString(),
-        type: result.success ? "bot" : "error",
-        content: result.success
-          ? result.response || "I found some information, but couldn't format a proper response."
-          : result.message || "I couldn't find relevant information for your query.",
-        timestamp: new Date(),
-        query: currentQuery,
-      }
+      if (result.success && result.response) {
+        const { response, source } = parseApiResponse(result.response)
 
-      setMessages((prev) => [...prev, botMessage])
+        const botMessage: QueryMessage = {
+          id: (Date.now() + 1).toString(),
+          type: "bot",
+          content: response,
+          source: source,
+          timestamp: new Date(),
+          query: currentQuery,
+        }
 
-      if (!result.success) {
+        setMessages((prev) => [...prev, botMessage])
+      } else {
+        const errorMessage: QueryMessage = {
+          id: (Date.now() + 1).toString(),
+          type: "error",
+          content: result.message || "I couldn't find relevant information for your query.",
+          timestamp: new Date(),
+          query: currentQuery,
+        }
+
+        setMessages((prev) => [...prev, errorMessage])
         toast({
           title: "Query Failed",
           description: "I couldn't find relevant information. Try rephrasing your question.",
@@ -144,12 +187,16 @@ export function QueryInterface() {
   }
 
   const clearConversation = () => {
-    setMessages([])
-    localStorage.removeItem("query-history")
-    toast({
-      title: "Conversation Cleared",
-      description: "All messages have been removed.",
-    })
+    const user = getCurrentUser()
+    if (user) {
+      const userSpecificKey = `query-history-${user.email}`
+      setMessages([])
+      localStorage.removeItem(userSpecificKey)
+      toast({
+        title: "Conversation Cleared",
+        description: "All messages have been removed.",
+      })
+    }
   }
 
   return (
@@ -184,7 +231,6 @@ export function QueryInterface() {
                 <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
                 <p className="text-lg font-medium mb-2">Welcome to UOL Knowledge Base!</p>
                 <p>Ask me anything about the university.</p>
-                <p className="text-sm mt-2">Try one of the suggested questions below to get started.</p>
               </div>
             ) : (
               <>
@@ -204,7 +250,36 @@ export function QueryInterface() {
                         <span className="text-xs opacity-70">{message.timestamp.toLocaleTimeString()}</span>
                       </div>
 
-                      <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                      <div className="space-y-3">
+                        <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+
+                        {message.type === "bot" && message.source && (
+                          <div className="border-t border-current/10 pt-3">
+                            <div className="flex items-start space-x-2 text-xs">
+                              <FileText className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                              <div className="space-y-1">
+                                <span className="font-medium opacity-70">Sources:</span>
+                                <div className="space-y-1">
+                                  {Array.isArray(message.source) ? (
+                                    message.source.map((src, index) => (
+                                      <div
+                                        key={index}
+                                        className="bg-background/50 px-2 py-1 rounded text-foreground/80 text-xs"
+                                      >
+                                        📄 {src}
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div className="bg-background/50 px-2 py-1 rounded text-foreground/80 text-xs">
+                                      📄 {message.source}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
 
                       {message.type === "bot" && (
                         <div className="flex items-center space-x-2 mt-3 pt-2 border-t border-current/10">
@@ -288,9 +363,6 @@ export function QueryInterface() {
           <p className="text-xs text-muted-foreground text-center">Press Enter to send, Shift+Enter for new line</p>
         </CardContent>
       </Card>
-
-      {/* Suggested Queries */}
-      <SuggestedQueries onQuerySelect={handleSuggestedQuery} />
     </div>
   )
 }

@@ -138,10 +138,12 @@ export default function HomePage() {
           ) : currentView === "query" ? (
             <UserDashboard view="query" />
           ) : (
-            <UserDashboard view="stats" />
+            <UserDashboard view="dashboard" isAdmin={true} />
           )
+        ) : currentView === "query" ? (
+          <UserDashboard view="query" />
         ) : (
-          <UserDashboard view={currentView === "query" ? "query" : "stats"} />
+          <UserDashboard view="dashboard" />
         )}
       </main>
     </div>
